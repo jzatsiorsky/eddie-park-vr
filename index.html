@@ -7,7 +7,10 @@
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { background: #0f172a; color: #f8fafc; font-family: system-ui, -apple-system, sans-serif; overflow: hidden; }
-  #canvas-container { width: 100vw; height: 100vh; }
+  #canvas-container {
+    width: 100vw; height: 100vh;
+    background: linear-gradient(to bottom, rgb(92, 158, 230) 0%, rgb(199, 224, 245) 100%);
+  }
   .hud {
     position: fixed; top: 16px; left: 16px; z-index: 10;
     background: rgba(15, 23, 42, 0.88); backdrop-filter: blur(12px);
@@ -81,9 +84,12 @@ import { VRButton } from 'three/addons/webxr/VRButton.js';
 
 const loaderMsg = document.getElementById('park-loading');
 const container = document.getElementById('canvas-container');
-const renderer = new THREE.WebGLRenderer({ antialias: true });
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.outputColorSpace = THREE.LinearSRGBColorSpace;
+renderer.toneMapping = THREE.NoToneMapping;
+renderer.setClearColor(0x000000, 0);
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 renderer.xr.enabled = true;
@@ -91,41 +97,112 @@ container.appendChild(renderer.domElement);
 document.body.appendChild(VRButton.createButton(renderer));
 
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x6da6e2);
-scene.fog = new THREE.FogExp2(0x8cbbe8, 0.0022);
 
-const camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.2, 400);
+const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.25, 450);
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
 controls.dampingFactor = 0.06;
 
-const hemiLight = new THREE.HemisphereLight(0x9ec5f8, 0x4d6b53, 0.88);
-scene.add(hemiLight);
-
-const dirLight = new THREE.DirectionalLight(0xfff6e5, 1.45);
-dirLight.position.set(52.4, 51.6, 34.0);
+// Calibrated 123 deg ESE azimuth, 39.5 deg elevation sun vector matching Software3DRenderer
+const dirLight = new THREE.DirectionalLight(0xffffff, 1.0);
+dirLight.position.set(64.71, 63.61, 42.03);
 dirLight.castShadow = true;
-dirLight.shadow.mapSize.width = 2048;
-dirLight.shadow.mapSize.height = 2048;
+dirLight.shadow.mapSize.width = 4096;
+dirLight.shadow.mapSize.height = 4096;
 dirLight.shadow.camera.near = 5;
-dirLight.shadow.camera.far = 180;
-const d = 68;
+dirLight.shadow.camera.far = 200;
+const d = 72;
 dirLight.shadow.camera.left = -d;
 dirLight.shadow.camera.right = d;
 dirLight.shadow.camera.top = d;
 dirLight.shadow.camera.bottom = -d;
-dirLight.shadow.bias = -0.0015;
+dirLight.shadow.bias = -0.0022;
+dirLight.shadow.normalBias = 0.06;
 scene.add(dirLight);
+
+function createVibrantParkMaterial() {
+  const mat = new THREE.MeshLambertMaterial({
+    vertexColors: true,
+    flatShading: true,
+    side: THREE.DoubleSide,
+  });
+  mat.onBeforeCompile = (shader) => {
+    shader.vertexShader = shader.vertexShader.replace(
+      '#include <common>',
+      '#include <common>\nvarying vec3 vWorldPosCustom;'
+    );
+    shader.vertexShader = shader.vertexShader.replace(
+      '#include <worldpos_vertex>',
+      '#include <worldpos_vertex>\nvWorldPosCustom = (modelMatrix * vec4(transformed, 1.0)).xyz;'
+    );
+    shader.fragmentShader = shader.fragmentShader.replace(
+      '#include <common>',
+      '#include <common>\nvarying vec3 vWorldPosCustom;'
+    );
+    shader.fragmentShader = shader.fragmentShader.replace(
+      'vec3 outgoingLight = reflectedLight.directDiffuse + reflectedLight.indirectDiffuse + totalEmissiveRadiance;',
+      `
+      vec3 N = normalize(cross(dFdx(vWorldPosCustom), dFdy(vWorldPosCustom)));
+      if (dot(N, cameraPosition - vWorldPosCustom) < 0.0) N = -N;
+      vec3 L = normalize(vec3(0.6471, 0.6361, 0.4203));
+      float raw_dot = dot(N, L);
+
+      vec3 base_c = vColor.rgb;
+      bool isCloud = (vWorldPosCustom.y > 28.0);
+      bool isFoliage = (!isCloud) && (vWorldPosCustom.y > 0.35) && (
+        (base_c.g > base_c.r * 1.05 && base_c.g > base_c.b * 1.03) ||
+        (base_c.r > 0.60 && base_c.b > 0.52 && vWorldPosCustom.y > 1.2)
+      );
+
+      float ndotl = (isFoliage || isCloud)
+        ? max(0.22, (raw_dot + 0.50) / 1.50)
+        : max(0.0, raw_dot);
+      float sky_hemi = 0.5 * (N.y + 1.0);
+
+      float shadowMask = 1.0;
+      #if defined( USE_SHADOWMAP ) && ( NUM_DIR_LIGHT_SHADOWS > 0 )
+      DirectionalLightShadow dirShad = directionalLightShadows[ 0 ];
+      shadowMask = receiveShadow ? getShadow( directionalShadowMap[ 0 ], dirShad.shadowMapSize, dirShad.shadowBias, dirShad.shadowRadius, vDirectionalShadowCoord[ 0 ] ) : 1.0;
+      #endif
+
+      float lit_frac = isCloud ? 1.0 : (isFoliage ? (0.36 + 0.64 * shadowMask) : shadowMask);
+
+      vec3 lit_rgb;
+      if (isCloud) {
+        vec3 c_shade = mix(vec3(0.82, 0.89, 0.97), vec3(1.02, 1.01, 1.00), ndotl);
+        lit_rgb = base_c * c_shade;
+      } else {
+        vec3 amb_sky = vec3(0.44, 0.52, 0.60);
+        vec3 amb_gnd = vec3(0.34, 0.40, 0.34);
+        vec3 sun_color = vec3(1.02, 0.97, 0.90);
+        vec3 amb_c = mix(amb_gnd, amb_sky, sky_hemi);
+        float dir_factor = (0.14 + 0.62 * ndotl) * lit_frac;
+        lit_rgb = base_c * (amb_c + sun_color * dir_factor);
+        if (!isFoliage) {
+          float shd_weight = 1.0 - lit_frac;
+          vec3 shadow_tint = vec3(0.22, 0.34, 0.52) * base_c;
+          lit_rgb = mix(lit_rgb, shadow_tint, 0.42 * shd_weight);
+        }
+      }
+      gl_FragColor = vec4(clamp(lit_rgb, 0.0, 1.0), 1.0);
+      return;
+      vec3 outgoingLight = lit_rgb;
+      `
+    );
+  };
+  return mat;
+}
 
 const loader = new GLTFLoader();
 loader.load(
   './eddie_park_vr.glb',
   (gltf) => {
+    const customMat = createVibrantParkMaterial();
     gltf.scene.traverse((child) => {
       if (child.isMesh) {
+        child.material = customMat;
         child.castShadow = true;
         child.receiveShadow = true;
-        child.material.flatShading = true;
       }
     });
     scene.add(gltf.scene);
@@ -158,8 +235,8 @@ window.setCam = (mode) => {
     camera.position.set(36, 12.5, 3);
     controls.target.set(-14, 1.5, -4);
   } else if (mode === 'iso') {
-    camera.position.set(-55, 48, 22);
-    controls.target.set(8, 0, -2);
+    camera.position.set(-55, 48, 20);
+    controls.target.set(10, 0, -3);
   } else if (mode === 'aerial') {
     camera.position.set(0, 95, 0.1);
     controls.target.set(0, 0, 0);
