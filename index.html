@@ -98,7 +98,7 @@ document.body.appendChild(VRButton.createButton(renderer));
 
 const scene = new THREE.Scene();
 
-const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.25, 450);
+const camera = new THREE.PerspectiveCamera(46, window.innerWidth / window.innerHeight, 0.25, 450);
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
 controls.dampingFactor = 0.06;
@@ -116,33 +116,62 @@ dirLight.shadow.camera.left = -d;
 dirLight.shadow.camera.right = d;
 dirLight.shadow.camera.top = d;
 dirLight.shadow.camera.bottom = -d;
-dirLight.shadow.bias = -0.0022;
-dirLight.shadow.normalBias = 0.06;
+dirLight.shadow.bias = -0.0006;
+dirLight.shadow.normalBias = 0.0;
 scene.add(dirLight);
+
+function createShadowCasterDepthMaterial() {
+  const depthMat = new THREE.MeshDepthMaterial({
+    depthPacking: THREE.RGBADepthPacking,
+    side: THREE.DoubleSide,
+  });
+  depthMat.onBeforeCompile = (shader) => {
+    shader.vertexShader = shader.vertexShader.replace(
+      '#include <common>',
+      '#include <common>\nvarying vec3 vWorldPosDepth;\nvarying vec3 vWorldNormDepth;'
+    );
+    shader.vertexShader = shader.vertexShader.replace(
+      '#include <begin_vertex>',
+      '#include <begin_vertex>\nvWorldPosDepth = (modelMatrix * vec4(transformed, 1.0)).xyz;\nvWorldNormDepth = normalize(normal);'
+    );
+    shader.fragmentShader = shader.fragmentShader.replace(
+      '#include <common>',
+      '#include <common>\nvarying vec3 vWorldPosDepth;\nvarying vec3 vWorldNormDepth;'
+    );
+    shader.fragmentShader = shader.fragmentShader.replace(
+      'void main() {',
+      `void main() {
+      // Ground/lawn/sand/road surfaces (cast_shadow=False in Software3DRenderer) do not cast shadows onto themselves
+      if (vWorldPosDepth.y < 0.52 && abs(vWorldNormDepth.y) > 0.88) discard;
+      if (vWorldPosDepth.y > 28.0) discard;
+      `
+    );
+  };
+  return depthMat;
+}
 
 function createVibrantParkMaterial() {
   const mat = new THREE.MeshLambertMaterial({
     vertexColors: true,
-    flatShading: true,
     side: THREE.DoubleSide,
   });
   mat.onBeforeCompile = (shader) => {
     shader.vertexShader = shader.vertexShader.replace(
       '#include <common>',
-      '#include <common>\nvarying vec3 vWorldPosCustom;'
+      '#include <common>\nvarying vec3 vWorldPosCustom;\nvarying vec3 vWorldNormCustom;'
     );
     shader.vertexShader = shader.vertexShader.replace(
       '#include <worldpos_vertex>',
-      '#include <worldpos_vertex>\nvWorldPosCustom = (modelMatrix * vec4(transformed, 1.0)).xyz;'
+      '#include <worldpos_vertex>\nvWorldPosCustom = (modelMatrix * vec4(transformed, 1.0)).xyz;\nvWorldNormCustom = normalize(objectNormal);'
     );
     shader.fragmentShader = shader.fragmentShader.replace(
       '#include <common>',
-      '#include <common>\nvarying vec3 vWorldPosCustom;'
+      '#include <common>\nvarying vec3 vWorldPosCustom;\nvarying vec3 vWorldNormCustom;'
     );
     shader.fragmentShader = shader.fragmentShader.replace(
       'vec3 outgoingLight = reflectedLight.directDiffuse + reflectedLight.indirectDiffuse + totalEmissiveRadiance;',
       `
-      vec3 N = normalize(cross(dFdx(vWorldPosCustom), dFdy(vWorldPosCustom)));
+      vec3 N = normalize(vWorldNormCustom);
       if (dot(N, cameraPosition - vWorldPosCustom) < 0.0) N = -N;
       vec3 L = normalize(vec3(0.6471, 0.6361, 0.4203));
       float raw_dot = dot(N, L);
@@ -198,9 +227,11 @@ loader.load(
   './eddie_park_vr.glb',
   (gltf) => {
     const customMat = createVibrantParkMaterial();
+    const customDepth = createShadowCasterDepthMaterial();
     gltf.scene.traverse((child) => {
       if (child.isMesh) {
         child.material = customMat;
+        child.customDepthMaterial = customDepth;
         child.castShadow = true;
         child.receiveShadow = true;
       }
