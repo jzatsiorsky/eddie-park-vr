@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Eddie Park &amp; House — Low-Poly 3D VR Environment</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: #0f172a; color: #f8fafc; font-family: system-ui, -apple-system, sans-serif; overflow: hidden; }
+  #canvas-container { width: 100vw; height: 100vh; }
+  .hud {
+    position: fixed; top: 16px; left: 16px; z-index: 10;
+    background: rgba(15, 23, 42, 0.88); backdrop-filter: blur(12px);
+    border: 1px solid rgba(148, 163, 184, 0.25); border-radius: 12px;
+    padding: 14px 18px; max-width: 390px; box-shadow: 0 10px 30px rgba(0,0,0,0.45);
+  }
+  .hud h1 { font-size: 16px; font-weight: 700; margin-bottom: 4px; color: #38bdf8; }
+  .hud p { font-size: 12px; color: #cbd5e1; line-height: 1.4; margin-bottom: 10px; }
+  .btn-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 8px; }
+  button {
+    background: #1e293b; color: #e2e8f0; border: 1px solid #334155;
+    padding: 7px 10px; border-radius: 7px; font-size: 12px; font-weight: 600;
+    cursor: pointer; transition: all 0.15s;
+  }
+  button:hover, button.active { background: #0284c7; border-color: #38bdf8; color: #fff; }
+  .btn-wide { grid-column: span 2; background: #0f3f5c; border-color: #0284c7; }
+  .controls-hint { font-size: 11px; color: #94a3b8; border-top: 1px solid rgba(148,163,184,0.18); padding-top: 7px; }
+  #ref-card {
+    position: fixed; top: 16px; right: 16px; z-index: 10;
+    background: rgba(15, 23, 42, 0.90); backdrop-filter: blur(12px);
+    border: 1px solid rgba(148, 163, 184, 0.3); border-radius: 12px;
+    padding: 10px; width: min(420px, 44vw); box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+    display: none;
+  }
+  #ref-card.visible { display: block; }
+  #ref-card h2 { font-size: 12px; color: #cbd5e1; margin-bottom: 6px; display: flex; justify-content: space-between; align-items: center; }
+  #ref-card img { width: 100%; height: auto; border-radius: 8px; display: block; }
+  #park-loading {
+    position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+    background: rgba(15, 23, 42, 0.85); color: #38bdf8; font-size: 15px; font-weight: 600; z-index: 20;
+    transition: opacity 0.3s; pointer-events: none;
+  }
+</style>
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.164.1/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.164.1/examples/jsm/"
+  }
+}
+</script>
+</head>
+<body>
+<div id="park-loading">Loading 3D Low-Poly Park Model...</div>
+<div id="canvas-container"></div>
+<div class="hud">
+  <h1>Eddie Park &amp; House — 3D VR Park</h1>
+  <p>Low-poly 3D VR environment generated from aerial imagery (115m &times; 85m, calibrated 123&deg; ESE sun shadows).</p>
+  <div class="btn-grid">
+    <button onclick="setCam('player_west')">1. West Lawn VR POV</button>
+    <button onclick="setCam('player_east')">2. East Lawn VR POV</button>
+    <button onclick="setCam('iso')">3. Isometric Overview</button>
+    <button onclick="setCam('aerial')">4. Top-Down Aerial</button>
+    <button onclick="setCam('playgrounds')">5. Playgrounds View</button>
+    <button onclick="setCam('house')">6. Eddie House View</button>
+    <button class="btn-wide" onclick="toggleRef()">Toggle Source Aerial Photo Reference</button>
+  </div>
+  <div class="controls-hint">
+    Drag to orbit &bull; Scroll/Pinch to zoom &bull; Right-drag to pan &bull; <b>WASD / Arrows</b> to walk
+  </div>
+</div>
+<div id="ref-card" class="visible">
+  <h2><span>Source Aerial Image (Eddie Park &amp; House)</span><button onclick="toggleRef()" style="padding:2px 7px;font-size:11px;">Hide</button></h2>
+  <img src="./aerial_ref.jpg" alt="Source Aerial Photo" />
+</div>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { VRButton } from 'three/addons/webxr/VRButton.js';
+
+const loaderMsg = document.getElementById('park-loading');
+const container = document.getElementById('canvas-container');
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.xr.enabled = true;
+container.appendChild(renderer.domElement);
+document.body.appendChild(VRButton.createButton(renderer));
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x6da6e2);
+scene.fog = new THREE.FogExp2(0x8cbbe8, 0.0022);
+
+const camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.2, 400);
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.dampingFactor = 0.06;
+
+const hemiLight = new THREE.HemisphereLight(0x9ec5f8, 0x4d6b53, 0.88);
+scene.add(hemiLight);
+
+const dirLight = new THREE.DirectionalLight(0xfff6e5, 1.45);
+dirLight.position.set(52.4, 51.6, 34.0);
+dirLight.castShadow = true;
+dirLight.shadow.mapSize.width = 2048;
+dirLight.shadow.mapSize.height = 2048;
+dirLight.shadow.camera.near = 5;
+dirLight.shadow.camera.far = 180;
+const d = 68;
+dirLight.shadow.camera.left = -d;
+dirLight.shadow.camera.right = d;
+dirLight.shadow.camera.top = d;
+dirLight.shadow.camera.bottom = -d;
+dirLight.shadow.bias = -0.0015;
+scene.add(dirLight);
+
+const loader = new GLTFLoader();
+loader.load(
+  './eddie_park_vr.glb',
+  (gltf) => {
+    gltf.scene.traverse((child) => {
+      if (child.isMesh) {
+        child.castShadow = true;
+        child.receiveShadow = true;
+        child.material.flatShading = true;
+      }
+    });
+    scene.add(gltf.scene);
+    if (loaderMsg) {
+      loaderMsg.style.opacity = '0';
+      setTimeout(() => loaderMsg.remove(), 300);
+    }
+  },
+  (xhr) => {
+    if (loaderMsg && xhr.total > 0) {
+      const pct = Math.min(100, Math.round((xhr.loaded / xhr.total) * 100));
+      loaderMsg.textContent = `Loading 3D Low-Poly Park Model... ${pct}%`;
+    }
+  },
+  (err) => {
+    console.error('Error loading GLB:', err);
+    if (loaderMsg) loaderMsg.textContent = 'Error loading 3D model: ' + err;
+  }
+);
+
+window.toggleRef = () => {
+  document.getElementById('ref-card').classList.toggle('visible');
+};
+
+window.setCam = (mode) => {
+  if (mode === 'player_west') {
+    camera.position.set(-33.93, 1.75, -1.28);
+    controls.target.set(17.25, 2.2, -1.28);
+  } else if (mode === 'player_east') {
+    camera.position.set(36, 12.5, 3);
+    controls.target.set(-14, 1.5, -4);
+  } else if (mode === 'iso') {
+    camera.position.set(-55, 48, 22);
+    controls.target.set(8, 0, -2);
+  } else if (mode === 'aerial') {
+    camera.position.set(0, 95, 0.1);
+    controls.target.set(0, 0, 0);
+  } else if (mode === 'playgrounds') {
+    camera.position.set(-8, 12, 6);
+    controls.target.set(4, 1, -22);
+  } else if (mode === 'house') {
+    camera.position.set(16, 12, 2);
+    controls.target.set(36, 4, 22);
+  }
+  controls.update();
+};
+setCam('iso');
+
+const keys = {};
+window.addEventListener('keydown', (e) => { keys[e.code] = true; });
+window.addEventListener('keyup', (e) => { keys[e.code] = false; });
+
+const fwdVec = new THREE.Vector3();
+const rightVec = new THREE.Vector3();
+renderer.setAnimationLoop(() => {
+  const speed = (keys['ShiftLeft'] || keys['ShiftRight']) ? 0.65 : 0.28;
+  camera.getWorldDirection(fwdVec);
+  fwdVec.y = 0;
+  if (fwdVec.lengthSq() > 1e-6) fwdVec.normalize();
+  rightVec.crossVectors(fwdVec, camera.up).normalize();
+
+  if (keys['KeyW'] || keys['ArrowUp']) {
+    camera.position.addScaledVector(fwdVec, speed);
+    controls.target.addScaledVector(fwdVec, speed);
+  }
+  if (keys['KeyS'] || keys['ArrowDown']) {
+    camera.position.addScaledVector(fwdVec, -speed);
+    controls.target.addScaledVector(fwdVec, -speed);
+  }
+  if (keys['KeyA'] || keys['ArrowLeft']) {
+    camera.position.addScaledVector(rightVec, -speed);
+    controls.target.addScaledVector(rightVec, -speed);
+  }
+  if (keys['KeyD'] || keys['ArrowRight']) {
+    camera.position.addScaledVector(rightVec, speed);
+    controls.target.addScaledVector(rightVec, speed);
+  }
+  controls.update();
+  renderer.render(scene, camera);
+});
+
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+</script>
+</body>
+</html>
